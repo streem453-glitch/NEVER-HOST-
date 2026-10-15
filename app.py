@@ -43,11 +43,17 @@ button:disabled{opacity:.5}
 .num{font-size:23px;font-weight:bold}
 .muted{font-size:12px;color:#aaa5b5;margin-top:6px}
 .notice{padding:13px;background:#211a2a;border-radius:10px;color:#d9c6ee;line-height:1.5;font-size:13px}
-.bot{padding:15px 0;border-bottom:1px solid #302b39;overflow-wrap:anywhere}
+
+/* Стилизация строки бота и кнопки */
+.bot{padding:15px 0;border-bottom:1px solid #302b39;overflow-wrap:anywhere;display:flex;justify-content:space-between;align-items:center;gap:15px}
 .bot:last-child{border-bottom:0}
 .botname{font-weight:bold;margin-bottom:8px}
+.bot-info{flex:1}
+.btn-run{background:#22c55e;padding:8px 14px;font-size:13px}
+.btn-run.running{background:#ef4444}
+
 footer{text-align:center;color:#777181;font-size:12px;padding:24px}
-@media(max-width:420px){h1{font-size:27px}.card{padding:16px}.stat{padding:11px}.num{font-size:20px}}
+@media(max-width:420px){h1{font-size:27px}.card{padding:16px}.stat{padding:11px}.num{font-size:20px}.bot{flex-direction:column;align-items:flex-start}.btn-run{width:100%}}
 </style>
 </head>
 <body>
@@ -92,6 +98,27 @@ async function checkHealth(){
   el.textContent=r.ok&&d.status==='ok'?'● Сервер работает':'Сервер ответил с ошибкой';
  }catch(e){el.textContent='Сервер временно недоступен';}
 }
+
+// Функция отправки запроса на переключение состояния бота
+async function toggleBot(botId, currentStatus, btn) {
+ btn.disabled = true;
+ try {
+  const nextStatus = currentStatus === 'running' ? 'uploaded' : 'running';
+  const r = await fetch(`/api/bots/${botId}/status`, {
+   method: 'POST',
+   headers: { 'Content-Type': 'application/json' },
+   body: JSON.stringify({ status: nextStatus })
+  });
+  if(r.ok) {
+   await loadBots();
+  }
+ } catch(e) {
+  alert('Не удалось изменить состояние бота');
+ } finally {
+  btn.disabled = false;
+ }
+}
+
 async function loadBots(){
  const box=document.getElementById('bots');
  try{
@@ -103,16 +130,34 @@ async function loadBots(){
   if(!d.bots.length){box.innerHTML='<div class="muted">Пока файлов нет. Загрузи первый!</div>';return;}
   d.bots.forEach(b=>{
    const item=document.createElement('div');item.className='bot';
+   
+   const infoContainer=document.createElement('div');infoContainer.className='bot-info';
    const name=document.createElement('div');name.className='botname';name.textContent=b.name;
-   const info=document.createElement('div');info.className='muted';info.textContent=b.filename+' · '+b.size+' байт · Загружен, не запущен';
-   item.append(name,info);box.append(item);
+   
+   const isRun = b.status === 'running';
+   const statusText = isRun ? 'Запущен, работает' : 'Загружен, не запущен';
+   
+   const info=document.createElement('div');info.className='muted';
+   info.textContent=b.filename+' · '+b.size+' байт · ' + statusText;
+   infoContainer.append(name,info);
+   
+   // Добавление интерактивной кнопки действия
+   const runBtn=document.createElement('button');
+   runBtn.type='button';
+   runBtn.className = isRun ? 'btn-run running' : 'btn-run';
+   runBtn.textContent = isRun ? 'Остановить' : 'Запустить';
+   runBtn.onclick = () => toggleBot(b.id, b.status, runBtn);
+   
+   item.append(infoContainer, runBtn);
+   box.append(item);
   });
  }catch(e){box.textContent='Не удалось загрузить список.';}
 }
+
 document.getElementById('uploadForm').addEventListener('submit',async e=>{
  e.preventDefault();
  const form=e.currentTarget,btn=document.getElementById('submitBtn'),msg=document.getElementById('message');
- const file=document.getElementById('botfile').files[0];
+ const file=document.getElementById('botfile').files;
  if(!file){msg.textContent='Выбери файл.';return;}
  if(file.size>5*1024*1024){msg.textContent='Файл больше 5 МБ.';return;}
  btn.disabled=true;msg.textContent='Загружаем…';
@@ -143,6 +188,19 @@ def health():
 def list_bots():
     return {"bots": bots}
 
+# Добавлен новый эндпоинт для переключения статуса "Запустить/Остановить"
+from pydantic import BaseModel
+class StatusUpdate(BaseModel):
+    status: str
+
+@app.post("/api/bots/{bot_id}/status")
+def update_bot_status(bot_id: str, payload: StatusUpdate):
+    for bot in bots:
+        if bot["id"] == bot_id:
+            bot["status"] = payload.status
+            return {"ok": True, "bot": bot}
+    raise HTTPException(404, "Бот не найден")
+
 @app.post("/api/bots")
 async def upload_bot(
     name: str = Form(...),
@@ -161,24 +219,19 @@ async def upload_bot(
     target = UPLOAD_DIR / f"{bot_id}{ext}"
     
     try:
-        # Читаем файл целиком, так как лимит 5 МБ небольшой
         content = await file.read()
         size = len(content)
         
-        # Проверяем размер после чтения
         if size > MAX_SIZE:
             raise HTTPException(413, "Максимальный размер файла — 5 МБ")
             
-        # Записываем на диск
         with target.open("wb") as out:
             out.write(content)
             
     except HTTPException:
-        # Если упало по причине 413, удаляем файл, если он создался, и прокидываем HTTP-ошибку
         target.unlink(missing_ok=True)
         raise
     except Exception:
-        # Любые другие непредвиденные ошибки
         target.unlink(missing_ok=True)
         raise HTTPException(500, "Внутренняя ошибка сервера при записи файла")
     finally:
@@ -193,4 +246,4 @@ async def upload_bot(
     }
     bots.append(bot)
     return {"ok": True, "bot": bot}
- 
+     
