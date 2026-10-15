@@ -1,3 +1,5 @@
 fastapi
+aiogram
+aiohttp
 uvicorn[standard]
 python-multipart
