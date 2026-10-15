@@ -6,15 +6,16 @@ import os
 
 app = FastAPI(title="NEVER-HOST")
 
+# Папка для загрузки файлов
 UPLOAD_DIR = Path("/tmp/never-host-uploads")
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
+# 5 МБ максимальный размер файла
 MAX_SIZE = 5 * 1024 * 1024
 bots = []
 
 PAGE = r"""
 <!doctype html>
-
 <html lang="ru">
 <head>
 <meta charset="utf-8">
@@ -128,58 +129,68 @@ checkHealth();loadBots();
 </script>
 </body>
 </html>
-"""@app.get("/", response_class=HTMLResponse)
+"""
+
+@app.get("/", response_class=HTMLResponse)
 def home():
-return PAGE
+    return PAGE
 
 @app.get("/health")
 def health():
-return {"status": "ok", "service": "NEVER-HOST"}
+    return {"status": "ok", "service": "NEVER-HOST"}
 
 @app.get("/api/bots")
 def list_bots():
-return {"bots": bots}
+    return {"bots": bots}
 
 @app.post("/api/bots")
 async def upload_bot(
-name: str = Form(...),
-file: UploadFile = File(...)
+    name: str = Form(...),
+    file: UploadFile = File(...)
 ):
-name = name.strip()
-if not name or len(name) > 60:
-raise HTTPException(400, "Название должно содержать от 1 до 60 символов")
+    name = name.strip()
+    if not name or len(name) > 60:
+        raise HTTPException(400, "Название должно содержать от 1 до 60 символов")
 
-filename = Path(file.filename or "").name
-ext = Path(filename).suffix.lower()
-if ext not in {".py", ".zip"}:
-    raise HTTPException(400, "Разрешены только файлы .py и .zip")
+    filename = Path(file.filename or "").name
+    ext = Path(filename).suffix.lower()
+    if ext not in {".py", ".zip"}:
+        raise HTTPException(400, "Разрешены только файлы .py и .zip")
 
-bot_id = uuid4().hex
-target = UPLOAD_DIR / f"{bot_id}{ext}"
-size = 0
+    bot_id = uuid4().hex
+    target = UPLOAD_DIR / f"{bot_id}{ext}"
+    
+    try:
+        # Читаем файл целиком, так как лимит 5 МБ небольшой
+        content = await file.read()
+        size = len(content)
+        
+        # Проверяем размер после чтения
+        if size > MAX_SIZE:
+            raise HTTPException(413, "Максимальный размер файла — 5 МБ")
+            
+        # Записываем на диск
+        with target.open("wb") as out:
+            out.write(content)
+            
+    except HTTPException:
+        # Если упало по причине 413, удаляем файл, если он создался, и прокидываем HTTP-ошибку
+        target.unlink(missing_ok=True)
+        raise
+    except Exception:
+        # Любые другие непредвиденные ошибки
+        target.unlink(missing_ok=True)
+        raise HTTPException(500, "Внутренняя ошибка сервера при записи файла")
+    finally:
+        await file.close()
 
-try:
-    with target.open("wb") as out:
-        while True:
-            chunk = await file.read(64 * 1024)
-            if not chunk:
-                break
-            size += len(chunk)
-            if size > MAX_SIZE:
-                raise HTTPException(413, "Максимальный размер файла — 5 МБ")
-            out.write(chunk)
-except Exception:
-    target.unlink(missing_ok=True)
-    raise
-finally:
-    await file.close()
-
-bot = {
-    "id": bot_id,
-    "name": name,
-    "filename": filename,
-    "size": size,
-    "status": "uploaded"
-}
-bots.append(bot)
-return {"ok": True, "bot": bot}
+    bot = {
+        "id": bot_id,
+        "name": name,
+        "filename": filename,
+        "size": size,
+        "status": "uploaded"
+    }
+    bots.append(bot)
+    return {"ok": True, "bot": bot}
+ 
