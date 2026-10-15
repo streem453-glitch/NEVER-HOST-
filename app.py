@@ -99,24 +99,31 @@ async function checkHealth(){
  }catch(e){el.textContent='Сервер временно недоступен';}
 }
 
-// Функция отправки запроса на переключение состояния бота
 async function toggleBot(botId, currentStatus, btn) {
- btn.disabled = true;
- try {
-  const nextStatus = currentStatus === 'running' ? 'uploaded' : 'running';
-  const r = await fetch(`/api/bots/${botId}/status`, {
-   method: 'POST',
-   headers: { 'Content-Type': 'application/json' },
-   body: JSON.stringify({ status: nextStatus })
-  });
-  if(r.ok) {
-   await loadBots();
+  btn.disabled = true;
+
+  try {
+    const nextStatus =
+      currentStatus === 'running' ? 'uploaded' : 'running';
+
+    const r = await fetch(`/api/bots/${botId}/status`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({status: nextStatus})
+    });
+
+    const data = await r.json();
+
+    if (!r.ok) {
+      throw new Error(data.detail || 'Ошибка сервера');
+    }
+
+    await loadBots();
+  } catch (e) {
+    alert('Ошибка: ' + e.message);
+  } finally {
+    btn.disabled = false;
   }
- } catch(e) {
-  alert('Не удалось изменить состояние бота');
- } finally {
-  btn.disabled = false;
- }
 }
 
 async function loadBots(){
@@ -141,7 +148,6 @@ async function loadBots(){
    info.textContent=b.filename+' · '+b.size+' байт · ' + statusText;
    infoContainer.append(name,info);
    
-   // Добавление интерактивной кнопки действия
    const runBtn=document.createElement('button');
    runBtn.type='button';
    runBtn.className = isRun ? 'btn-run running' : 'btn-run';
@@ -157,9 +163,11 @@ async function loadBots(){
 document.getElementById('uploadForm').addEventListener('submit',async e=>{
  e.preventDefault();
  const form=e.currentTarget,btn=document.getElementById('submitBtn'),msg=document.getElementById('message');
- const file=document.getElementById('botfile').files;
+ 
+ const file=document.getElementById('botfile').files[0];
  if(!file){msg.textContent='Выбери файл.';return;}
  if(file.size>5*1024*1024){msg.textContent='Файл больше 5 МБ.';return;}
+ 
  btn.disabled=true;msg.textContent='Загружаем…';
  try{
   const r=await fetch('/api/bots',{method:'POST',body:new FormData(form)});
@@ -188,18 +196,20 @@ def health():
 def list_bots():
     return {"bots": bots}
 
-# Добавлен новый эндпоинт для переключения статуса "Запустить/Остановить"
 from pydantic import BaseModel
 class StatusUpdate(BaseModel):
     status: str
 
+# Обновленный эндпоинт, возвращающий ошибку 501
 @app.post("/api/bots/{bot_id}/status")
 def update_bot_status(bot_id: str, payload: StatusUpdate):
-    for bot in bots:
-        if bot["id"] == bot_id:
-            bot["status"] = payload.status
-            return {"ok": True, "bot": bot}
-    raise HTTPException(404, "Бот не найден")
+    raise HTTPException(
+        status_code=501,
+        detail=(
+            "Запуск процессов пока не подключён. "
+            "Файл загружен, но бот не запущен."
+        )
+    )
 
 @app.post("/api/bots")
 async def upload_bot(
@@ -246,4 +256,4 @@ async def upload_bot(
     }
     bots.append(bot)
     return {"ok": True, "bot": bot}
-     
+ 
